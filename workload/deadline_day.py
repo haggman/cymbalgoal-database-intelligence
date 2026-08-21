@@ -60,6 +60,21 @@ SAMPLES = os.path.join(OUT, "samples.jsonl")
 
 DB_NAME = os.environ.get("CG_DB", "cymbalgoal")
 
+# 🔴 THE CORPUS RUNS TO 2026-05-24, NOT 2025.
+#
+# Measured 2026-08-21: appearances.appearance_date spans 2012-08-10 to
+# 2026-05-24 over 832,193 rows, and 105,453 of them fall in the last 30 days.
+#
+# The first cut anchored every date predicate on '2025-01-01', which is sixteen
+# months back from the end of the data. "The last three days" was therefore a
+# slice out of the MIDDLE of the corpus with another year and a half of rows
+# sitting after it — which is not what deadline day means, and it quietly made
+# every window predicate match far more than intended.
+#
+# Anchor on the real end of the data instead. main() refreshes this from the
+# database at startup so it cannot go stale if the corpus is ever regenerated.
+ANCHOR = "2026-05-24"
+
 # ---------------------------------------------------------------------------
 # THE QUERY CATALOGUE
 # ---------------------------------------------------------------------------
@@ -82,7 +97,7 @@ def q_transfer_ticker(rnd):
     return f"""
         SELECT count(*), sum(transfer_fee), max(transfer_fee)
           FROM transfers
-         WHERE transfer_date >= DATE '2025-01-01' - INTERVAL '{days} days'
+         WHERE transfer_date >= DATE '{ANCHOR}' - INTERVAL '{days} days'
            AND transfer_fee IS NOT NULL"""
 
 
@@ -96,7 +111,7 @@ def q_contract_watch(rnd):
         SELECT main_position, count(*), avg(market_value_in_eur)::BIGINT
           FROM players
          WHERE contract_expiration_date IS NOT NULL
-           AND contract_expiration_date < DATE '2025-01-01' + INTERVAL '{m} months'
+           AND contract_expiration_date < DATE '{ANCHOR}' + INTERVAL '{m} months'
          GROUP BY main_position"""
 
 
@@ -123,7 +138,7 @@ def q_form_window(rnd):
     return f"""
         SELECT count(*), sum(goals), sum(assists), sum(minutes_played)
           FROM appearances
-         WHERE appearance_date >= DATE '2025-01-01' - INTERVAL '{days} days'"""
+         WHERE appearance_date >= DATE '{ANCHOR}' - INTERVAL '{days} days'"""
 
 
 def q_player_timeline(rnd):
@@ -189,18 +204,92 @@ def q_heavy_rollup(rnd):
          ORDER BY goals DESC NULLS LAST"""
 
 
-# (tag, weight, builder). Weights are relative and UNMEASURED.
+# (tag, weight, builder).
+#
+# 🔴 REBALANCED 2026-08-21 against the first live run. The first cut's weights
+# were guesses and two of them were badly wrong. Measured average execution
+# time, from Query Insights over a ~20 minute run:
+#
+#     deadline-rollup  2,982.54 ms   (heavy lane)
+#     scout-search       108.12 ms
+#     league-table       106.57 ms
+#     form-window         96.91 ms   <- seq scan on appearances, 13,525 calls
+#     player-timeline      40.85 ms
+#     transfer-ticker      7.53 ms   <- was weight 30. THIRTY.
+#
+# transfer-ticker was the single heaviest-weighted query in the mix and it
+# costs 7.5 ms, because `transfers` is 11 MB and 65,494 rows — too small to
+# hurt no matter how badly it is indexed. Nearly a third of the load was being
+# spent on the cheapest statement in the catalogue.
+#
+# The weight now follows the cost. appearances (111 MB, 832,193 rows) is the
+# only table in this corpus big enough to make a seq scan hurt, so the two
+# queries that scan it carry the mix.
+#
+# ⚠️ transfer-ticker is NOT removed and its weight must not go to zero. It is
+# still the query whose NAME tells the deadline-day story, and Task 2's lesson
+# is partly that the query you assume is the problem is not always the one the
+# data blames. A cheap statement that appears in the list is useful evidence.
 CATALOGUE = [
-    ("transfer-ticker", 30, q_transfer_ticker),
-    ("contract-watch",  15, q_contract_watch),
+    ("form-window",     32, q_form_window),
     ("squad-view",      20, q_squad_view),
-    ("form-window",     15, q_form_window),
-    ("player-timeline", 12, q_player_timeline),
+    ("player-timeline", 20, q_player_timeline),
+    ("contract-watch",  12, q_contract_watch),
+    ("transfer-ticker",  8, q_transfer_ticker),
     ("scout-search",     5, q_scout_search),
     ("league-table",     3, q_league_table),
 ]
 
 HEAVY = ("deadline-rollup", q_heavy_rollup)
+
+
+def q_transfer_desk(rnd):
+    """A transfer completing. THE ONLY WRITE IN THIS WORKLOAD.
+
+    🔴 ADDED 2026-08-21, and it exists to fix a measured gap rather than to add
+    realism for its own sake.
+
+    The first live run's wait-event breakdown was: CPU 2.36 s, IPC 0.21 s,
+    IO 0 s, LWLock 0 s, Client 0, Internal 0. Every drop of it CPU and the
+    parallel-query plumbing behind Gather. That is because the workload was
+    ENTIRELY READ-ONLY, and a read-only workload against a fully cached corpus
+    can never produce a lock wait or an I/O wait.
+
+    Task 4's teaching payload is the difference between "this query was slow"
+    and "this query was slow BECAUSE it was waiting on something". With only
+    CPU and IPC in the picture there is no second half of that sentence, and
+    Task 4 collapses into Task 2.
+
+    So: deadline day gets its actual defining event. A player changes clubs.
+
+    WHY AN UPDATE ON `players` SPECIFICALLY. It is the widest table in the
+    corpus — ~17 KB a row, because of the 3072-dimension embedding — so every
+    row update writes a large new tuple and real WAL. That is the cheapest
+    honest way to put I/O and lock waits into a database that otherwise fits
+    entirely in RAM.
+
+    It is also true to the story, which matters more than it sounds: a lab that
+    manufactures contention with pg_sleep or an advisory lock is teaching the
+    student about the workload generator. This one is teaching them about
+    deadline day.
+
+    ⚠️ IT MUTATES THE CORPUS, deliberately and reversibly. Only
+    `current_club_id` moves, and only ever to a club that already exists, so no
+    foreign key is violated and no row count changes. A fresh load restores the
+    original state. Nothing in the lab asserts a specific player's club.
+    """
+    return """
+        UPDATE players
+           SET current_club_id = (
+                   SELECT club_id FROM clubs
+                    ORDER BY random() LIMIT 1)
+         WHERE player_id = (
+                   SELECT player_id FROM players
+                    WHERE last_season >= 2024
+                    ORDER BY random() LIMIT 1)"""
+
+
+WRITES = ("transfer-desk", q_transfer_desk)
 
 APP = "cymbalgoal-deadline-day"
 
@@ -312,6 +401,37 @@ def heavy_worker(wid, connect, stop_at, results, lock, gap_s):
         time.sleep(gap_s)
 
 
+def write_worker(wid, connect, stop_at, results, lock, gap_s):
+    """The transfer desk. One connection, deliberately slow-handed.
+
+    Kept to a low rate on purpose. The goal is lock and I/O waits appearing in
+    the wait-event breakdown, not a write-saturated instance — a lab that
+    hammers writes teaches nothing except that writes are expensive.
+    """
+    rnd = random.Random(4242 + wid)
+    tag, build = WRITES
+    conn = connect()
+    while not os.path.exists(STOP) and time.time() < stop_at:
+        sql = tagged(tag, build(rnd))
+        t0 = time.time()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            cur.close()
+            ok = True
+        except Exception as e:                                     # noqa: BLE001
+            ok = False
+            try:
+                conn = connect()
+            except Exception:                                      # noqa: BLE001
+                time.sleep(1.0)
+            sys.stderr.write(f"[wr{wid}] {tag}: {type(e).__name__}: {e}\n")
+        with lock:
+            results.append({"t": time.time(), "tag": tag,
+                            "ms": (time.time() - t0) * 1000.0, "ok": ok})
+        time.sleep(gap_s)
+
+
 def flusher(results, lock, stop_at):
     os.makedirs(OUT, exist_ok=True)
     seen = 0
@@ -364,13 +484,29 @@ def report():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workers", type=int, default=12,
-                    help="routine-query connections. UNMEASURED default.")
+    # 🔴 DEFAULTS RAISED 2026-08-21, from a measured starting point rather than
+    # a guess. The first cut ran 12 workers at a 250 ms think time and the
+    # instance sat at roughly a third of capacity at peak — 45% P99 CPU on the
+    # spike, and the corpus is fully cached so there is no I/O to wait on.
+    # A database at one third of capacity is not an incident.
+    #
+    # Roughly 3x the concurrency and a quarter of the think time. Both are
+    # overridable from the environment so the ceiling can be found without
+    # editing this file: CG_WORKERS, CG_THINK_MS, CG_WRITERS.
+    ap.add_argument("--workers", type=int,
+                    default=int(os.environ.get("CG_WORKERS", 32)),
+                    help="routine-query connections.")
     ap.add_argument("--heavy", type=int, default=2,
                     help="long-runner connections. Task 4 needs at least one.")
     ap.add_argument("--heavy-gap", type=float, default=15.0,
                     help="seconds between long-runner starts")
-    ap.add_argument("--think-ms", type=float, default=250.0,
+    ap.add_argument("--writers", type=int,
+                    default=int(os.environ.get("CG_WRITERS", 2)),
+                    help="transfer-desk write connections. 0 disables writes entirely.")
+    ap.add_argument("--write-gap", type=float, default=2.0,
+                    help="seconds between writes, per writer")
+    ap.add_argument("--think-ms", type=float,
+                    default=float(os.environ.get("CG_THINK_MS", 60)),
                     help="upper bound on per-worker pause. 0 is a stress test, not a workload.")
     ap.add_argument("--seconds", type=float, default=0.0, help="0 = until stopped")
     ap.add_argument("--report", action="store_true")
@@ -382,11 +518,30 @@ def main():
     if os.path.exists(STOP):
         os.remove(STOP)
     uri, user, connect = make_connect()
+
+    # Re-anchor the date predicates on the real end of the corpus. If the data
+    # is ever regenerated the constant above goes stale silently, and a stale
+    # anchor does not error — it just quietly changes what every window query
+    # matches, which is the worst kind of wrong in a workload generator.
+    global ANCHOR
+    try:
+        c = connect()
+        cur = c.cursor()
+        cur.execute("SELECT max(appearance_date)::date::text FROM appearances")
+        found = cur.fetchone()[0]
+        cur.close()
+        c.close()
+        if found:
+            if found != ANCHOR:
+                print(f"anchor   {found}  (constant said {ANCHOR} — using the database)")
+            ANCHOR = found
+    except Exception as e:                                         # noqa: BLE001
+        print(f"anchor   {ANCHOR}  (could not read from database: {e})")
     stop_at = time.time() + args.seconds if args.seconds else time.time() + 86400
 
     print(f"target   {uri}")
     print(f"as       {user}")
-    print(f"workers  {args.workers} routine + {args.heavy} heavy")
+    print(f"workers  {args.workers} routine + {args.heavy} heavy + {args.writers} write")
     print(f"stop     touch {STOP}")
     print()
 
@@ -400,6 +555,11 @@ def main():
     for i in range(args.heavy):
         t = threading.Thread(target=heavy_worker, daemon=True,
                              args=(i, connect, stop_at, results, lock, args.heavy_gap))
+        t.start()
+        threads.append(t)
+    for i in range(args.writers):
+        t = threading.Thread(target=write_worker, daemon=True,
+                             args=(i, connect, stop_at, results, lock, args.write_gap))
         t.start()
         threads.append(t)
     f = threading.Thread(target=flusher, daemon=True, args=(results, lock, stop_at))

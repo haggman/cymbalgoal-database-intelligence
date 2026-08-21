@@ -451,6 +451,27 @@ def main():
         except Exception as e:                                     # noqa: BLE001
             log(f"  ⚠️ {ext}: {e}")
 
+    # ⚠️ PROTOTYPE INSTRUMENT, not a lab requirement — and a candidate for
+    # removal once the prototype is done.
+    #
+    # pg_stat_statements is the table Query Insights is built on. Reading it
+    # directly answers "is the workload actually slow" with NO console lag at
+    # all, which is what lets the prototype separate two questions that are
+    # easy to confuse: whether the queries hurt, and how long the console takes
+    # to say so.
+    #
+    # TWO ways this fails and they look nothing alike. The extension may not be
+    # creatable at all, or it may create and then error on SELECT because the
+    # library is not in shared_preload_libraries. So create it, then actually
+    # read from it, and report which of the two happened.
+    try:
+        run(session, "CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+        n = scalar(session, "SELECT count(*) FROM pg_stat_statements")
+        log(f"  pg_stat_statements         readable, {n} statements tracked")
+    except Exception as e:                                         # noqa: BLE001
+        log(f"  ⚠️ pg_stat_statements unusable: {e}")
+        log("     (workload/deadline-day.sh report is the fallback measurement)")
+
     for name, ver in rows(session, "SELECT extname, extversion FROM pg_extension ORDER BY oid"):
         log(f"  {name:26s} {ver}")
 
