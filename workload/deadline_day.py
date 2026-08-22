@@ -496,9 +496,20 @@ def main():
     ap.add_argument("--workers", type=int,
                     default=int(os.environ.get("CG_WORKERS", 32)),
                     help="routine-query connections.")
-    ap.add_argument("--heavy", type=int, default=2,
-                    help="long-runner connections. Task 4 needs at least one.")
-    ap.add_argument("--heavy-gap", type=float, default=15.0,
+    # 🔴 RAISED 2026-08-21. Task 4's Active Queries view only shows what is
+    # running AT THAT INSTANT. deadline-rollup takes ~3.7 s; at 2 workers on a
+    # 15 s gap that is roughly a 40% duty cycle, and the view was measured
+    # EMPTY of it on a live look — the student refreshes, sees nothing longer
+    # than 0.38 s, and concludes the lab is broken.
+    #
+    # 3 workers on a 2 s gap puts the duty cycle above 95%, so a long-runner is
+    # essentially always there to be caught in the act. It is still an honest
+    # workload — a real deadline-day rollup would run continuously, not once a
+    # quarter-minute.
+    ap.add_argument("--heavy", type=int,
+                    default=int(os.environ.get("CG_HEAVY", 3)),
+                    help="long-runner connections. Task 4 needs one visible at all times.")
+    ap.add_argument("--heavy-gap", type=float, default=2.0,
                     help="seconds between long-runner starts")
     ap.add_argument("--writers", type=int,
                     default=int(os.environ.get("CG_WRITERS", 2)),

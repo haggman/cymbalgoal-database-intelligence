@@ -4,10 +4,11 @@ Companion repository for the CymbalGoal AlloyDB workshop.
 
 CymbalGoal is a global football fan and analytics platform, running on 13,439 players and 796 clubs
 drawn from the Big 5 European leagues plus the Champions and Europa Leagues. It's transfer deadline
-day. Traffic is up, the ticker is busy, response times are creeping, and the person on call is a
-developer rather than a DBA — which describes most on-call rotations most of the time.
+day. Traffic is up, the ticker is busy, and response times are creeping. The person on call might be
+the DBA, or might be a developer who wrote the service and inherited the pager with it — the
+surfaces in this workshop are useful from either end, for different reasons.
 
-You'll work the incident the way that developer would: triage from the Database Center, find the
+You'll work the incident the way it actually happens: triage from the Database Center, find the
 expensive queries and the part of the app that issued them, ask the Index Advisor what it would do,
 read what the instance is doing right now, and then ask the same questions again in plain English.
 

@@ -183,26 +183,73 @@ def enable_data_api(uri, project):
     token = sh("gcloud auth print-access-token")
     body = json.dumps({"dataApiAccess": "ENABLED"}).encode()
 
-    for ver in ("v1", "v1beta", "v1alpha"):
-        url = f"https://alloydb.googleapis.com/{ver}/{uri}?updateMask=dataApiAccess"
-        req = urllib.request.Request(url, data=body, method="PATCH", headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "X-Goog-User-Project": project,
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                op = json.loads(r.read() or b"{}").get("name", "")
-            log(f"  Data API PATCH accepted on /{ver}/ — not waiting (~134s)")
-            return ver, op
-        except urllib.error.HTTPError as e:
-            log(f"  /{ver}/ -> HTTP {e.code}: {e.read()[:200].decode(errors='replace')}")
-        except Exception as e:                                    # noqa: BLE001
-            log(f"  /{ver}/ -> {type(e).__name__}: {e}")
+    # 🔴 THE 409 RACE, MEASURED 2026-08-21. Fire-and-forget was wrong.
+    #
+    # TWO DIFFERENT 409 MESSAGES, both measured, both ABORTED, both the same
+    # remedy — do not let a future reader decide one of them is a real error:
+    #
+    #   "A Primary instance cannot perform this update while other instances in
+    #    the same cluster are also performing updates"   (cluster serialization)
+    #   "unable to queue the operation"                  (the queue itself busy)
+    #
+    # That is why the retry keys on e.code == 409 and never on the message text.
+    #
+    # AlloyDB serializes instance updates per cluster. This PATCH is an instance
+    # update, and so is anything else still settling — the tail of the Terraform
+    # create, or a human saving the Query Insights settings dialog in the console
+    # while the script runs. Whichever it is, all three API versions 409 within
+    # milliseconds of each other, because they are the same operation queue.
+    #
+    # ⚠️ THE FAILURE IS SILENT AND LATE. The load carries on, the log scrolls
+    # past, and the lab breaks thirty minutes later at whatever task needs the
+    # Data API — with an error that says nothing about provisioning. In a room
+    # of 300 that is unrecoverable, because nobody re-runs Task 0.
+    #
+    # So: retry with backoff on 409 specifically. Other HTTP codes are real
+    # errors and fall through to the next version immediately, as before.
+    ATTEMPTS = 6
+    BACKOFF = 20          # seconds; ~2 min of total patience, well inside the load
 
-    log("  🔴 Data API PATCH FAILED ON ALL VERSIONS.")
+    for attempt in range(1, ATTEMPTS + 1):
+        conflict = False
+        for ver in ("v1", "v1beta", "v1alpha"):
+            url = f"https://alloydb.googleapis.com/{ver}/{uri}?updateMask=dataApiAccess"
+            req = urllib.request.Request(url, data=body, method="PATCH", headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "X-Goog-User-Project": project,
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    op = json.loads(r.read() or b"{}").get("name", "")
+                note = "" if attempt == 1 else f" (attempt {attempt})"
+                log(f"  Data API PATCH accepted on /{ver}/{note} — not waiting (~134s)")
+                return ver, op
+            except urllib.error.HTTPError as e:
+                detail = e.read()[:200].decode(errors="replace")
+                if e.code == 409:
+                    # Another instance update is in flight. Every version will
+                    # give the same answer, so stop asking and wait instead.
+                    conflict = True
+                    if attempt == 1:
+                        log(f"  /{ver}/ -> HTTP 409, another instance update is in flight")
+                    break
+                log(f"  /{ver}/ -> HTTP {e.code}: {detail}")
+            except Exception as e:                                # noqa: BLE001
+                log(f"  /{ver}/ -> {type(e).__name__}: {e}")
+
+        if not conflict:
+            break                                                 # a real error, not a race
+        if attempt < ATTEMPTS:
+            log(f"     waiting {BACKOFF}s for the cluster to settle "
+                f"({attempt}/{ATTEMPTS - 1})")
+            time.sleep(BACKOFF)
+
+    log("  🔴 Data API PATCH FAILED.")
     log("     The data still loads. Anything that executes SQL through the")
     log("     Data API or an MCP surface will not work.")
+    log("     Re-run just this step later with `terraform output data_api_patch_command`,")
+    log("     or from the console: AlloyDB > instance > Edit > enable the Data API.")
     return None, None
 
 
@@ -592,6 +639,16 @@ def main():
                     SELECT (SELECT count(*) FROM players),
                            (SELECT count(*) FROM clubs),
                            (SELECT count(*) FROM appearances)""")
+
+    # Read it back. The section previously printed its header and nothing else,
+    # which reads exactly like a step that failed — and `terraform output
+    # instructor_preflight` tells an instructor to run
+    # `SELECT * FROM provisioning_status;`, so if this table were ever missing
+    # the output would be pointing at a relation that does not exist.
+    for pl, cl, ap, at in rows(session, """
+            SELECT players, clubs, appearances, completed_at
+              FROM provisioning_status ORDER BY completed_at DESC LIMIT 1"""):
+        log(f"  players {pl:,}  clubs {cl:,}  appearances {ap:,}  at {at}")
 
     log("\n### Data API confirmation ###")
     confirm_data_api(uri, api_ver)
