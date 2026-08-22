@@ -78,21 +78,34 @@ fi
 
 cat <<'EOF'
 
-================================================================================
-  Load complete. Starting the deadline-day traffic simulator.
+==============================================================
+ ✅  LOAD FINISHED — you can stop watching this tab now.
+==============================================================
 
-  ⚠️  LEAVE THIS TAB ALONE.
+ NEXT   This tab is about to become the deadline-day traffic
+        simulator. It starts in a few seconds and keeps running
+        until you stop it.
 
-      The simulator runs here, in the foreground, for the rest of the lab. It
-      prints a summary line every ten seconds. That output is what keeps this
-      Cloud Shell session from being reclaimed while you work in the console.
+        You will see a few startup lines, then a summary line
+        beginning "last 10s" every ten seconds. Once one of
+        those appears, traffic is flowing and there is nothing
+        left to watch here.
 
-      Open a SECOND Cloud Shell tab with the + button for everything else.
+ DO     Open a SECOND Cloud Shell tab with the + button and
+        carry on with Task 0.2. Every command from here on
+        runs in that second tab.
 
-      Press Ctrl+C here when you have finished the lab.
-================================================================================
+ DO NOT close this tab or type in it. Press Ctrl+C here only
+        when you have finished the entire lab.
+
+==============================================================
 
 EOF
 
-sleep 4
+for n in 5 4 3 2 1; do
+  printf "\r starting the traffic simulator in %s... " "${n}"
+  sleep 1
+done
+printf "\r starting the traffic simulator now.        \n\n"
+
 exec bash "${REPO}/workload/deadline-day.sh" run

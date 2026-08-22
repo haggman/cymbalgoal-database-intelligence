@@ -466,10 +466,49 @@ def summarize(batch, prefix=""):
     print(prefix + " | ".join(line), flush=True)
 
 
-def report():
+def status_report(window_s=60.0):
+    """Is traffic flowing RIGHT NOW? Reads the samples file, not the log.
+
+    ⚠️ The log at ~/cymbalgoal-workload.log is only written by the backgrounded
+    `start` path. In the foreground `run` path — which is what the lab uses —
+    output goes to the terminal and that log stays empty. Tailing it reported
+    nothing and looked like a broken workload. The samples file is written by
+    the flusher either way, so it is the honest source for this check.
+    """
+    if not os.path.exists(SAMPLES):
+        print("  no samples yet — the first batch lands about ten seconds"
+              " after the simulator starts. Give it a moment and re-run.")
+        return
+    rows = [json.loads(l) for l in open(SAMPLES)]
+    if not rows:
+        print("  no samples yet — give it about ten seconds and re-run.")
+        return
+    now = time.time()
+    age = now - rows[-1]["t"]
+    print(f"  {len(rows):,} statements sampled so far, most recent {age:.0f}s ago")
+    recent = [r for r in rows if now - r["t"] <= window_s]
+    if not recent:
+        print(f"  ⚠️  nothing in the last {window_s:.0f}s. The process is alive but"
+              " not issuing queries — check the tab it is running in.")
+        return
+    summarize(recent, prefix=f"  last {window_s:.0f}s ")
+
+
+def report(since_min=0.0):
     if not os.path.exists(SAMPLES):
         sys.exit(f"no samples at {SAMPLES}")
     batch = [json.loads(l) for l in open(SAMPLES)]
+    # ⚠️ samples.jsonl is APPEND-ONLY and survives restarts, so a bare report is
+    # cumulative over everything ever run. That dilutes a before/after
+    # comparison to the point of uselessness: apply an index at minute 40 and
+    # the "after" report still carries forty minutes of "before" in it.
+    # --since is what makes the before/after demonstration honest.
+    if since_min > 0:
+        cutoff = time.time() - since_min * 60.0
+        batch = [r for r in batch if r["t"] >= cutoff]
+        if not batch:
+            sys.exit(f"no samples in the last {since_min:g} minutes")
+        print(f"--- last {since_min:g} minutes only ---")
     print(f"{len(batch):,} samples over "
           f"{(batch[-1]['t'] - batch[0]['t'])/60:.1f} minutes\n")
     by = {}
@@ -521,10 +560,19 @@ def main():
                     help="upper bound on per-worker pause. 0 is a stress test, not a workload.")
     ap.add_argument("--seconds", type=float, default=0.0, help="0 = until stopped")
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--status", action="store_true",
+                    help="is traffic flowing right now? reads the samples file.")
+    ap.add_argument("--since", type=float, default=0.0,
+                    help="with --report, only samples from the last N minutes. "
+                         "Use this for before/after comparisons — a bare "
+                         "--report is cumulative over every run.")
     args = ap.parse_args()
 
+    if args.status:
+        return status_report()
+
     if args.report:
-        return report()
+        return report(args.since)
 
     if os.path.exists(STOP):
         os.remove(STOP)

@@ -67,14 +67,19 @@ case "${1:-status}" in
   status)
     if alive; then
       echo "running, pid $(cat "${PIDFILE}")"
-      tail -3 "${LOG}" 2>/dev/null
+      # ⚠️ NOT `tail $LOG`. That log is only written by the backgrounded `start`
+      # path; under `run` the output goes to the terminal and the log is empty,
+      # so tailing it printed nothing and read as a dead workload. --status
+      # reads the samples file, which both paths write.
+      python3 "${HERE}/deadline_day.py" --status
     else
       echo "not running"
       echo "  restart it with: bash ${BASH_SOURCE[0]} run"
     fi
     ;;
   report)
-    python3 "${HERE}/deadline_day.py" --report
+    # extra args pass through — `report --since 5` is the before/after form
+    python3 "${HERE}/deadline_day.py" --report "${@:2}"
     ;;
   stop)
     touch "${STOPFILE}"
