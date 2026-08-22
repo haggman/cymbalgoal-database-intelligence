@@ -1,4 +1,4 @@
-# CymbalGoal — Agentic Operations: Database Intelligence
+# CymbalGoal — AlloyDB Agentic Operations: From Symptom to Fix
 
 Companion repository for the CymbalGoal AlloyDB workshop.
 

@@ -1,5 +1,5 @@
 # =============================================================================
-# CymbalGoal Lab 3 — Agentic Operations: Database Intelligence. Provisioning.
+# CymbalGoal Lab 3 — AlloyDB Agentic Operations: From Symptom to Fix. Provisioning.
 # =============================================================================
 # FORKED FROM mkt014, which is proven at Start Lab. Everything mkt013 and mkt014
 # got right is carried over verbatim and is NOT re-derived here — read the
@@ -80,10 +80,32 @@ resource "google_project_service" "apis" {
     # exactly why it is easy to forget in the one project where it is not.
     "monitoring.googleapis.com",
 
-    # AlloyDB Studio's Gemini panel, and the "assistive experiences" flag on
-    # observability_config below. Same INFERRED status it had in mkt014 —
+    # 🔴 TASK 5. The Database Insights MCP server —
+    # https://databaseinsights.googleapis.com/mcp — refuses to EXECUTE without
+    # this, and the failure mode is the worst kind: measured 2026-08-21,
+    # `tools/list` returns all seven tools quite happily with the API disabled,
+    # and only `tools/call` fails, with
+    #
+    #   "Database Insights API has not been used in project ... before or it is
+    #    disabled."
+    #
+    # So a student sees a healthy-looking agent with a full tool list, asks it a
+    # question, and gets an error that reads like the agent is broken rather
+    # than like the project is missing an API.
+    #
+    # ⚠️ NOT INFERRED. This exact service string came from Google's own error
+    # message, so it does not carry the guesswork risk the line below does.
+    "databaseinsights.googleapis.com",
+
+    # AlloyDB Studio's Gemini panel. Same INFERRED status it had in mkt014 —
     # Google's AlloyDB pages never name this service string; it is deduced from
     # the two permissions the Studio doc does list.
+    #
+    # ⚠️ It does NOT unlock observability_config.assistive_experiences_enabled.
+    # Measured 2026-08-21: with this API enabled in the same apply, that field
+    # still failed the instance create on
+    # ASSISTIVE_EXPERIENCES_NOT_SUPPORTED_WITHOUT_GEMINI_CLOUD_ASSIST. See the
+    # note on the field itself.
     "cloudaicompanion.googleapis.com",
   ])
   service            = each.value
@@ -265,13 +287,24 @@ resource "google_alloydb_instance" "primary" {
     # Default 10240. The tagged statements are long-ish; leave headroom.
     max_query_string_length = 20000
 
-    # ⚠️ UNVERIFIED WHAT THIS ACTUALLY TURNS ON. The provider describes it as
-    # "Whether assistive experiences are enabled for this AlloyDB instance" and
-    # says nothing more. Best guess: the Gemini-assisted panels in the AlloyDB
-    # console, which is adjacent to Task 5. Left ON so the prototype can see
-    # what appears; if it turns out to be Cloud Assist and therefore
-    # support-gated (P-02), take it out.
-    assistive_experiences_enabled = true
+    # 🔴 MEASURED 2026-08-21, AND IT IS THE ANSWER TO ITS OWN QUESTION. Setting
+    # this to true FAILS THE INSTANCE CREATE, at Start Lab, for the whole room:
+    #
+    #   Error 400: Invalid resource state ... assistive experiences cannot be
+    #   enabled without enabling Gemini Cloud Assist
+    #   type: ASSISTIVE_EXPERIENCES_NOT_SUPPORTED_WITHOUT_GEMINI_CLOUD_ASSIST
+    #
+    # So the field IS Cloud Assist, which P-02 already put out of core, and
+    # cloudaicompanion.googleapis.com being enabled in this same apply was not
+    # enough to satisfy it — the same lesson Discovery Engine taught in mkt013,
+    # in a new place: enabling an API is not enabling the feature.
+    #
+    # Leave it false. It is the ONLY field in this block that gates the create,
+    # so nothing else here is at risk from it, and the eight settings above are
+    # what Tasks 2 and 4 actually need. Do not chase geminicloudassist as a
+    # service string to get it back — no Lab 3 task uses the panel, and a
+    # guessed service string halts provisioning for every student at once.
+    assistive_experiences_enabled = false
   }
 
   # ⚠️ EVERY NAME VERIFIED against
@@ -287,16 +320,59 @@ resource "google_alloydb_instance" "primary" {
     # this flag is what lets it authenticate.
     "alloydb.iam_authentication" = "on"
 
-    # ---- HELD PENDING A PROTOTYPE RULING -------------------------------------
+    # ---- 🔴 THE COLUMNAR RULING, MEASURED 2026-08-21 -------------------------
     #
-    # These two are inherited from mkt014, where NO TASK USED EITHER. That is a
-    # standing open question in the build plan and Lab 3 is where it gets
-    # closed, in one direction or the other.
+    # `google_columnar_engine.enabled` came across from mkt013 via mkt014 as a
+    # standing open question — no task used it in either lab. Lab 3 closed it,
+    # and not in the direction anyone expected: LEFT ALONE, IT DESTROYS THE
+    # LAB'S CENTRAL PREMISE.
     #
-    # google_columnar_engine.enabled
-    #   Candidate Lab 3 material: a columnar scan is a genuinely DIFFERENT fix
-    #   from an index, which would give the lab three distinct repairs instead
-    #   of two. ce116 in this repo is prior art. Rule it in or take it out.
+    # What happened. Task 3's whole subject is the Index Advisor finding a real
+    # index on a genuinely slow query. On the first live run the advisor
+    # produced exactly ONE recommendation across 192 tracked statements —
+    # `CREATE INDEX ON games(season)`, worth a 6% cost improvement on the
+    # lowest-weighted query in the workload. Everything the workload was built
+    # to punish came back empty.
+    #
+    # The reason, read off an EXPLAIN:
+    #
+    #   Parallel Custom Scan (columnar scan) on appearances
+    #     Columnar cache search mode: native
+    #   Execution Time: 3.542 ms
+    #
+    # Not a seq scan. `enable_auto_columnarization` defaults ON, so with the
+    # engine enabled AlloyDB had quietly columnarized `appearances` and turned
+    # the lab's slow query into a 3.5 ms one. A hypopg hypothetical index on
+    # appearance_date was created and the planner IGNORED it — nothing beats a
+    # warm columnar scan on that aggregate. The advisor was right to say
+    # nothing. There was nothing wrong.
+    #
+    # ⚠️ This is also the real explanation for mkt007's Index Advisor step,
+    # which shipped saying "your query is already efficient—thanks to the
+    # columnar engine and the data size—so no index is recommended." That read
+    # like writing around a failure. It was a correct diagnosis nobody followed
+    # up on. Eight months later it cost this session a full prototype cycle.
+    #
+    # THE RESOLUTION — and it makes the lab better rather than smaller:
+    #
+    #   enabled                     = "on"   RESTART REQUIRED, so it must be
+    #                                        set here, at create. Students
+    #                                        cannot toggle this mid-lab; a
+    #                                        restart drops every connection and
+    #                                        kills the workload.
+    #   enable_auto_columnarization = "off"  NO restart. This is the one that
+    #                                        matters. Engine available, column
+    #                                        store EMPTY, nothing columnarized
+    #                                        behind anyone's back.
+    #
+    # So the engine is armed and idle. Task 3's index work happens against
+    # honest seq scans, and a LATER task populates the column store deliberately
+    # at runtime — no restart — as a second, different kind of repair.
+    #
+    # 🔴 HARD ORDERING CONSTRAINT FOR THE BUILD SESSION: whatever task
+    # columnarizes `appearances` must come AFTER the Index Advisor task. Do it
+    # earlier and Task 3 has nothing to find, which is precisely the failure
+    # this comment exists to record.
     #
     # google_ml_integration.enable_cost_optimized_ai_functions
     #   The D-36 gate. Measured in full already — see
@@ -306,7 +382,20 @@ resource "google_alloydb_instance" "primary" {
     #
     # enable_preview_ai_functions rides along with the AI-function ruling; it
     # is what gates the preview ai.* surface the other flag operates on.
-    "google_columnar_engine.enabled"                           = "on"
+    "google_columnar_engine.enabled" = "on"
+
+    # ⚠️ THE LOAD-BEARING LINE. Removing it silently re-breaks Task 3, and the
+    # symptom is an Index Advisor that returns nothing — which is
+    # indistinguishable from an advisor that has nothing to say. See above.
+    "google_columnar_engine.enable_auto_columnarization" = "off"
+
+    # A convenience, never a step the lab depends on. The advisor's automated
+    # analysis defaults to 'EVERY 24 HOURS', which is why the console's
+    # Recommendations column was empty in a twelve-hour-old project. One hour is
+    # the floor the format allows. Task 3 uses the ON-DEMAND function
+    # (google_db_advisor_recommend_indexes) and does not wait for this.
+    "google_db_advisor.auto_advisor_schedule" = "EVERY 1 HOURS"
+
     "google_ml_integration.enable_preview_ai_functions"        = "on"
     "google_ml_integration.enable_cost_optimized_ai_functions" = "on"
 
