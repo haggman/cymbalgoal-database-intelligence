@@ -52,8 +52,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 
 GCS = os.environ.get("CG_GCS", "gs://class-demo/alloydb-labs/cymbalgoal")
 DB_NAME = os.environ.get("CG_DB", "cymbalgoal")
@@ -168,107 +166,40 @@ def discover():
 
 
 # ---------------------------------------------------------------------------
-# 1. Data API PATCH — carried from Lab 2 unchanged
+# 1. (removed) Data API PATCH
 # ---------------------------------------------------------------------------
-def enable_data_api(uri, project):
-    """Fire-and-forget. ~134 s, and nothing needs it until Task 5.
-
-    The enum is "ENABLED". Google's prose says ALLOW_DATA_API directly above a
-    curl block on the same page that sends ENABLED; that is a docs bug, proven
-    with an HTTP 400 naming the rejected value (2026-08-18). /v1/ works, so
-    nothing is pinned to an alpha surface.
-
-    ⚠️ Whether Lab 3 needs this at all depends on what Task 5's surface turns
-    out to be. It is async and free, so it runs either way.
-    """
-    token = sh("gcloud auth print-access-token")
-    body = json.dumps({"dataApiAccess": "ENABLED"}).encode()
-
-    # 🔴 THE 409 RACE, MEASURED 2026-08-21. Fire-and-forget was wrong.
-    #
-    # TWO DIFFERENT 409 MESSAGES, both measured, both ABORTED, both the same
-    # remedy — do not let a future reader decide one of them is a real error:
-    #
-    #   "A Primary instance cannot perform this update while other instances in
-    #    the same cluster are also performing updates"   (cluster serialization)
-    #   "unable to queue the operation"                  (the queue itself busy)
-    #
-    # That is why the retry keys on e.code == 409 and never on the message text.
-    #
-    # AlloyDB serializes instance updates per cluster. This PATCH is an instance
-    # update, and so is anything else still settling — the tail of the Terraform
-    # create, or a human saving the Query Insights settings dialog in the console
-    # while the script runs. Whichever it is, all three API versions 409 within
-    # milliseconds of each other, because they are the same operation queue.
-    #
-    # ⚠️ THE FAILURE IS SILENT AND LATE. The load carries on, the log scrolls
-    # past, and the lab breaks thirty minutes later at whatever task needs the
-    # Data API — with an error that says nothing about provisioning. In a room
-    # of 300 that is unrecoverable, because nobody re-runs Task 0.
-    #
-    # So: retry with backoff on 409 specifically. Other HTTP codes are real
-    # errors and fall through to the next version immediately, as before.
-    ATTEMPTS = 6
-    BACKOFF = 20          # seconds; ~2 min of total patience, well inside the load
-
-    for attempt in range(1, ATTEMPTS + 1):
-        conflict = False
-        for ver in ("v1", "v1beta", "v1alpha"):
-            url = f"https://alloydb.googleapis.com/{ver}/{uri}?updateMask=dataApiAccess"
-            req = urllib.request.Request(url, data=body, method="PATCH", headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "X-Goog-User-Project": project,
-            })
-            try:
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    op = json.loads(r.read() or b"{}").get("name", "")
-                note = "" if attempt == 1 else f" (attempt {attempt})"
-                log(f"  Data API PATCH accepted on /{ver}/{note} — not waiting (~134s)")
-                return ver, op
-            except urllib.error.HTTPError as e:
-                detail = e.read()[:200].decode(errors="replace")
-                if e.code == 409:
-                    # Another instance update is in flight. Every version will
-                    # give the same answer, so stop asking and wait instead.
-                    conflict = True
-                    if attempt == 1:
-                        log(f"  /{ver}/ -> HTTP 409, another instance update is in flight")
-                    break
-                log(f"  /{ver}/ -> HTTP {e.code}: {detail}")
-            except Exception as e:                                # noqa: BLE001
-                log(f"  /{ver}/ -> {type(e).__name__}: {e}")
-
-        if not conflict:
-            break                                                 # a real error, not a race
-        if attempt < ATTEMPTS:
-            log(f"     waiting {BACKOFF}s for the cluster to settle "
-                f"({attempt}/{ATTEMPTS - 1})")
-            time.sleep(BACKOFF)
-
-    log("  🔴 Data API PATCH FAILED.")
-    log("     The data still loads. Anything that executes SQL through the")
-    log("     Data API or an MCP surface will not work.")
-    log("     Re-run just this step later with `terraform output data_api_patch_command`,")
-    log("     or from the console: AlloyDB > instance > Edit > enable the Data API.")
-    return None, None
-
-
-def confirm_data_api(uri, ver):
-    if not ver:
-        return
-    token = sh("gcloud auth print-access-token")
-    try:
-        g = urllib.request.Request(f"https://alloydb.googleapis.com/{ver}/{uri}",
-                                   headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(g, timeout=30) as r:
-            state = json.loads(r.read() or b"{}").get("dataApiAccess", "<ABSENT>")
-    except Exception as e:                                         # noqa: BLE001
-        log(f"  could not confirm Data API: {e}")
-        return
-    log(f"  Data API: {state}" if state == "ENABLED"
-        else f"  ⚠️ Data API reads '{state}', not ENABLED. The PATCH takes ~134s.")
-
+# 🔴 CUT 2026-08-22, deliberately, after it was measured doing harm.
+#
+# It was carried over from mkt014 unchanged, where it IS load-bearing: that
+# lab's ADK agent drives the AlloyDB MCP server, whose execute_sql tools reach
+# the instance over HTTPS, and the Data API is exactly what permits that.
+#
+# LAB 3 USES A DIFFERENT SERVER. The Database Insights MCP server
+# (databaseinsights.googleapis.com/mcp) exposes seven READ-ONLY observability
+# tools — aggregated query stats, wait events, index recommendations. Not one
+# of them executes SQL, so nothing here ever wanted what the PATCH unlocks.
+# AlloyDB Studio also works without it, measured, which matters because Task 3
+# lives in Studio.
+#
+# WHAT IT COST US, measured 2026-08-22 on a live run:
+#   * Enabling it RESTARTS THE INSTANCE. pg_postmaster_start_time() and
+#     pg_stat_statements_info.stats_reset came back as the same millisecond.
+#   * Every workload connection dropped at once — a wall of
+#     "InterfaceError: network error" in the student's terminal.
+#   * pg_stat_statements went to zero. That is the table Query Insights renders
+#     and the Index Advisor reads. Early in the lab the workload rebuilds it
+#     within minutes; late in the lab it would gut Tasks 2 and 3.
+#   * It fires async and races other instance updates, so WHEN it lands is not
+#     under our control — hence the 6x/20s 409 retry loop that also came out.
+#
+# So: an instance restart, a scary 409 the lab had to apologise for, an IAM
+# permission and ~120 words of warning box, in exchange for a capability no
+# task uses.
+#
+# ⚠️ IF A FUTURE TASK EVER NEEDS SQL-OVER-HTTPS, this comes back — see mkt014's
+# setup/lab2-setup.py for the working version, including the /v1/ + "ENABLED"
+# details (Google's own docs say ALLOW_DATA_API and are wrong) and the 409
+# retry. Do not re-derive it.
 
 # ---------------------------------------------------------------------------
 # 2. Connect
@@ -448,10 +379,6 @@ def build_synthetic(session, millions):
 def main():
     t_start = time.time()
     project, user, region, cluster, instance, uri = discover()
-
-    log("### Data API ###")
-    api_ver, _ = enable_data_api(uri, project)
-    log()
 
     connect, session = make_session(uri, user)
 
@@ -650,9 +577,6 @@ def main():
             SELECT players, clubs, appearances, completed_at
               FROM provisioning_status ORDER BY completed_at DESC LIMIT 1"""):
         log(f"  players {pl:,}  clubs {cl:,}  appearances {ap:,}  at {at}")
-
-    log("\n### Data API confirmation ###")
-    confirm_data_api(uri, api_ver)
 
     log("\n" + "=" * 62)
     log(f" SETUP COMPLETE in {time.time()-t_start:.0f}s")

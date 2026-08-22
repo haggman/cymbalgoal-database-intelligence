@@ -32,7 +32,6 @@
 #   * Start the deadline-day workload  ->  workload/deadline-day.sh, also Task 0.
 #     The workload has to be running BEFORE Task 2, because Query Insights shows
 #     history and history takes time to accumulate.
-#   * PATCH dataApiAccess  ->  same setup script. No Terraform surface exists.
 # =============================================================================
 
 locals {
@@ -495,16 +494,29 @@ resource "google_project_iam_member" "student_roles" {
 # =============================================================================
 # ⚠️ WHAT THIS FILE DELIBERATELY DOES NOT DO
 # =============================================================================
-# dataApiAccess. There is no Terraform attribute and no gcloud flag — verified
-# 2026-08-18 against the google and google-beta providers, magic-modules, and
-# both gcloud surfaces, with nothing queued. The enum is "ENABLED"; Google's
-# prose says ALLOW_DATA_API directly above a curl block that sends ENABLED, and
-# that is a docs bug. The PATCH takes ~134 s, so the setup script fires it and
-# confirms later rather than blocking on it.
+# dataApiAccess. 🔴 CUT FROM LAB 3 ENTIRELY, 2026-08-22. There is no Terraform
+# attribute and no gcloud flag — verified 2026-08-18 against both providers,
+# magic-modules and both gcloud surfaces — and the setup script used to PATCH it
+# directly. It no longer does, and nothing should put it back without reading
+# this first.
 #
-# Whether Lab 3 needs it at all depends on what Task 5's natural-language
-# surface turns out to be. If it executes SQL through the AlloyDB MCP server,
-# it does. The setup script does it either way — it is async and free.
+# It was inherited from mkt014, where it is load-bearing: that lab's ADK agent
+# drives the AlloyDB MCP server, whose execute_sql tools reach the instance over
+# HTTPS, and the Data API is what permits that. LAB 3 USES A DIFFERENT SERVER —
+# Database Insights, seven READ-ONLY observability tools, none of which executes
+# SQL. AlloyDB Studio works without it too, measured, which matters because
+# Task 3 lives in Studio.
+#
+# 🔴 AND IT WAS NOT FREE. Measured on a live run 2026-08-22: enabling it
+# RESTARTS THE INSTANCE. pg_postmaster_start_time() and
+# pg_stat_statements_info.stats_reset came back as the same millisecond, every
+# workload connection dropped at once, and pg_stat_statements — the table Query
+# Insights renders and the Index Advisor reads — went to zero. It fires async
+# and races other instance updates, so WHEN that lands is not under our control.
+#
+# If a future task ever needs SQL-over-HTTPS, mkt014's setup/lab2-setup.py has
+# the working version including the "ENABLED" enum (Google's prose says
+# ALLOW_DATA_API and is wrong) and the 409 retry loop. Do not re-derive it.
 #
 # ---------------------------------------------------------------------------
 # Read pool: DELIBERATELY ABSENT (D-32), same as mkt013 and mkt014.

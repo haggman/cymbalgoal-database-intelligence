@@ -50,24 +50,16 @@ output "observability" {
   }
 }
 
-# The PATCH that has no Terraform surface. Emitted so that if the Task 0 setup
-# script is ever skipped, the exact command is one `terraform output` away.
-#
-# ⚠️ BOTH DETAILS MEASURED 2026-08-18, not copied from the docs: /v1/ works, so
-# nothing here is pinned to an alpha surface; and "ENABLED" is the only accepted
-# spelling — ALLOW_DATA_API returns HTTP 400 INVALID_ARGUMENT. It returns a
-# long-running operation that takes ~134 SECONDS. Anyone running it by hand
-# needs to know that or they will conclude it hung.
-output "data_api_patch_command" {
-  description = "Manual fallback if the setup script did not run. Requires alloydb.instances.update. Takes ~134s to settle."
-  value       = <<-EOT
-    curl -sS -X PATCH \
-      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-      -H "Content-Type: application/json" \
-      "https://alloydb.googleapis.com/v1/${local.instance_path}?updateMask=dataApiAccess" \
-      -d '{"dataApiAccess":"ENABLED"}'
-  EOT
-}
+# ---------------------------------------------------------------------------
+# 🔴 REMOVED 2026-08-22: output "data_api_patch_command"
+# ---------------------------------------------------------------------------
+# It existed so an instructor could re-fire the dataApiAccess PATCH by hand if
+# the setup script's attempt failed. The setup script no longer PATCHes at all —
+# enabling the Data API restarts the instance and resets pg_stat_statements, and
+# no Lab 3 task needs it. Full reasoning in main.tf, under "WHAT THIS FILE
+# DELIBERATELY DOES NOT DO". mkt014 still has the working command if it is ever
+# needed again.
+# ---------------------------------------------------------------------------
 
 output "instructor_preflight" {
   description = "Run after the setup script. Expect 13439 players / 796 clubs / 832193 appearances."

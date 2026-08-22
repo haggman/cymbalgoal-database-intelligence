@@ -455,14 +455,41 @@ def pct(xs, p):
     return xs[k]
 
 
-def summarize(batch, prefix=""):
+def split_ok(batch):
+    """Separate successful statements from failed ones, per tag.
+
+    🔴 FIXED 2026-08-22. Every sample has carried an `ok` flag since the first
+    cut, and NOTHING read it — so a statement that died on a dropped connection
+    after 31 seconds went into the percentiles as though it were a 31-second
+    QUERY. One brief connection blip produced `transfer-desk p95=31549` in a
+    workload whose writes run in about 74 ms, which is not a slow write, it is
+    a stopwatch left running on a broken socket.
+
+    That mattered beyond looking alarming: a before/after `report` straddling a
+    blip would show a fix making things worse. Latency stats now come from
+    successful statements only, and failures are surfaced as their own count so
+    they stay visible instead of being quietly dropped.
+    """
     by = {}
     for r in batch:
-        by.setdefault(r["tag"], []).append(r["ms"])
+        d = by.setdefault(r["tag"], {"ok": [], "err": 0})
+        if r.get("ok", True):
+            d["ok"].append(r["ms"])
+        else:
+            d["err"] += 1
+    return by
+
+
+def summarize(batch, prefix=""):
+    by = split_ok(batch)
     line = []
     for tag in sorted(by):
-        v = by[tag]
-        line.append(f"{tag} n={len(v)} p50={statistics.median(v):.0f} p95={pct(v,95):.0f}")
+        v, e = by[tag]["ok"], by[tag]["err"]
+        part = (f"{tag} n={len(v)} p50={statistics.median(v):.0f} p95={pct(v,95):.0f}"
+                if v else f"{tag} n=0")
+        if e:
+            part += f" err={e}"
+        line.append(part)
     print(prefix + " | ".join(line), flush=True)
 
 
@@ -511,14 +538,22 @@ def report(since_min=0.0):
         print(f"--- last {since_min:g} minutes only ---")
     print(f"{len(batch):,} samples over "
           f"{(batch[-1]['t'] - batch[0]['t'])/60:.1f} minutes\n")
-    by = {}
-    for r in batch:
-        by.setdefault(r["tag"], []).append(r["ms"])
-    print(f"{'tag':20s} {'n':>7s} {'p50 ms':>9s} {'p95 ms':>9s} {'p99 ms':>9s} {'max ms':>9s}")
-    for tag in sorted(by, key=lambda t: -statistics.median(by[t])):
-        v = by[tag]
+    by = split_ok(batch)
+    errs = sum(d["err"] for d in by.values())
+    if errs:
+        print(f"⚠️  {errs:,} statements failed (dropped connections). They are "
+              f"counted below but excluded from the latency columns.\n")
+    print(f"{'tag':20s} {'n':>7s} {'p50 ms':>9s} {'p95 ms':>9s} "
+          f"{'p99 ms':>9s} {'max ms':>9s} {'err':>6s}")
+    ranked = sorted((t for t in by if by[t]["ok"]),
+                    key=lambda t: -statistics.median(by[t]["ok"]))
+    for tag in ranked:
+        v, e = by[tag]["ok"], by[tag]["err"]
         print(f"{tag:20s} {len(v):>7,} {statistics.median(v):>9.0f} "
-              f"{pct(v,95):>9.0f} {pct(v,99):>9.0f} {max(v):>9.0f}")
+              f"{pct(v,95):>9.0f} {pct(v,99):>9.0f} {max(v):>9.0f} {e:>6,}")
+    for tag in sorted(t for t in by if not by[t]["ok"]):
+        print(f"{tag:20s} {0:>7,} {'-':>9s} {'-':>9s} {'-':>9s} {'-':>9s} "
+              f"{by[tag]['err']:>6,}")
 
 
 def main():
