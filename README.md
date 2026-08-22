@@ -13,7 +13,9 @@ expensive queries and the part of the app that issued them, ask the Index Adviso
 read what the instance is doing right now, and then ask the same questions again in plain English.
 
 **You clone this repository during the lab.** Task 0 runs `setup/lab3-setup.sh` from it, which
-creates the `cymbalgoal` database, loads the corpus, and starts the deadline-day workload.
+creates the `cymbalgoal` database, loads the corpus, and starts the deadline-day workload — a
+**traffic simulator** standing in for the fans, so the monitoring surfaces have real load to report
+on. The pressure on the database is genuine; only the reason for it is manufactured.
 Everything else is provisioned for you when you click **Start Lab** — the AlloyDB cluster, the IAM,
 the database flags and the observability configuration.
 
@@ -38,10 +40,16 @@ git clone https://github.com/haggman/cymbalgoal-database-intelligence.git
 
 ### `setup/`
 
-`lab3-setup.sh` installs one client library, backgrounds `lab3-setup.py`, and returns your prompt
-immediately. The loader creates the database, enables the extensions, applies the schema, loads
-roughly 1.6 million rows across eight tables plus the scouting profiles, builds **six** baseline
-indexes, runs `ANALYZE`, and then starts the workload.
+`lab3-setup.sh` installs one client library, then runs the loader **in the foreground** — about
+three minutes, narrating as it goes. The loader creates the database, enables the extensions,
+applies the schema, loads roughly 1.6 million rows across eight tables plus the scouting profiles,
+builds **six** baseline indexes, runs `ANALYZE`, and then hands off to the workload, which owns that
+terminal tab for the rest of the lab.
+
+⚠️ **The foreground is deliberate.** Cloud Shell reclaims idle sessions, and Tasks 1–4 are twenty to
+thirty minutes of console work each with nobody touching the terminal. A backgrounded workload dies
+in there, silently, and the first symptom is an Index Advisor with nothing to say. Open a second
+Cloud Shell tab for everything else.
 
 **Six is deliberate, and it is the most important thing in this repository.** Those six indexes are
 the ones a *search* application needs: join appearances to players, join events to games, walk a
@@ -63,10 +71,14 @@ statement carries a **sqlcommenter tag** naming the part of the app that issued 
 can tell you *the transfer ticker is slow* rather than *a query is slow*.
 
 ```bash
-bash workload/deadline-day.sh start     # background it
+bash workload/deadline-day.sh run       # foreground — what the lab does
+bash workload/deadline-day.sh status    # running? how fast?
 bash workload/deadline-day.sh report    # latency percentiles by app tag
 bash workload/deadline-day.sh stop
 ```
+
+`start` still exists and backgrounds it, for recovery or for scripting this outside a lab. It does
+not survive a Cloud Shell session timing out, which is why `run` is what Task 0 uses.
 
 `report` before a fix and `report` after it is the cheapest demonstration in the lab, and it works
 even when a console surface is still catching up.

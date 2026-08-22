@@ -7,7 +7,8 @@ to "the CymbalGoal database as a transfer-window app would actually have it" —
 loaded, analyzed, indexed the way a search-era schema would be indexed, and
 NOT indexed for the access patterns deadline day is about to introduce.
 
-WHERE: Cloud Shell. Launched (backgrounded) by lab3-setup.sh in Task 0.
+WHERE: Cloud Shell. Launched in the FOREGROUND by lab3-setup.sh in Task 0,
+which then hands off to the workload in the same tab. See that script for why.
 
 ⚠️ PORTED FROM mkt014's setup/lab2-setup.py, NOT REWRITTEN. Every non-obvious
 line in the loader was paid for once already — COPY rather than INSERT, the

@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
 #
-# CymbalGoal Lab 3 (mkt015) — Task 0 setup launcher.
+# CymbalGoal Lab 3 (mkt015) — Task 0 setup and workload launcher.
 #
 # WHERE: Cloud Shell.
 # RUN:   bash setup/lab3-setup.sh
 #
-# Installs the client library, then BACKGROUNDS the load and returns you to the
-# prompt immediately. When the load finishes it starts the deadline-day
-# workload, so by the time anyone opens a monitoring surface there is something
-# to see.
+# ⚠️ RUNS IN THE FOREGROUND AND NEVER RETURNS. Rewritten 2026-08-22.
 #
-# ⚠️ WHY THE WORKLOAD STARTS HERE AND NOT IN THE TASK THAT USES IT.
-# Query Insights shows HISTORY, and history takes time to accumulate. A student
-# who starts the workload at the top of Task 2 spends the first minutes of Task
-# 2 looking at an empty chart and concluding the product is broken. Starting it
-# in Task 0 buys twenty minutes of history for free — the same trick Lab 2 uses
-# to hide its data load behind the reading of Task 1.
+# The previous version backgrounded the load with nohup, handed the prompt back
+# in twenty seconds, and chained into a backgrounded workload. Two things killed
+# that design:
 #
-# Safe to re-run: every step in lab3-setup.py is guarded by an existence check,
-# and the workload launcher refuses to start a second copy.
+#   1. The load takes about three minutes and the task the student reads while
+#      it runs is about five minutes long. The parallelism bought almost
+#      nothing, and it cost a log-tailing step to get the output back.
+#
+#   2. THE WORKLOAD HAS TO SURVIVE TASKS 1-4, which are console work. Cloud
+#      Shell reclaims idle sessions, nohup does not survive VM reclaim, and the
+#      terminal sits untouched for twenty to thirty minutes during exactly the
+#      tasks that require load. It died three times in one prototype session.
+#      A foreground process printing every ten seconds keeps the session busy
+#      and makes a failure visible instead of silent.
+#
+# So: load in the foreground, tee to a log for troubleshooting, then hand off to
+# the workload, which owns this tab for the rest of the lab. The student opens a
+# SECOND Cloud Shell tab for everything else, and Task 0.2 tells them to.
+#
+# Safe to re-run: every step in lab3-setup.py is guarded by an existence check.
 #
 # Environment knobs, all optional:
 #   CG_PROFILES=0        skip the profile/embedding pass (~22 s faster)
+#                        ⚠️ also drops profile_text, which scout-search needs
 #   CG_SYNTHETIC=25      also build a 25-million-row ticker table, server-side
 #   CG_WORKLOAD=0        load only, do not start the workload
 
@@ -39,33 +48,51 @@ python3 -m pip install --quiet --upgrade \
   "google-cloud-alloydb-connector[pg8000]" 2>&1 | tail -2
 
 echo
-echo "Starting the CymbalGoal load in the background."
-echo "  log: ${LOG}"
+echo "Loading the CymbalGoal database. This takes about three minutes."
+echo "  a copy of everything below is saved to ${LOG}"
 echo
 
-nohup bash -c "
-  python3 '${HERE}/lab3-setup.py'
-  rc=\$?
-  if [ \"\$rc\" -eq 0 ] && [ '${START_WORKLOAD}' != '0' ]; then
-    echo
-    echo '### Starting the deadline-day workload ###'
-    bash '${REPO}/workload/deadline-day.sh' start
-  fi
-  exit \$rc
-" > "${LOG}" 2>&1 &
-PID=$!
-echo "  pid: ${PID}"
+python3 "${HERE}/lab3-setup.py" 2>&1 | tee "${LOG}"
+rc=${PIPESTATUS[0]}
 
-cat <<EOF
+if [ "${rc}" -ne 0 ]; then
+  cat <<EOF
 
-  This takes a few minutes. You do not need to wait for it — carry on with the
-  next task and it will be finished by the time you need the data.
+  ⚠️  The load did not finish cleanly (exit ${rc}).
 
-  Watch it:         tail -f ${LOG}
-  Check it's alive: ps -p ${PID}
+  Re-run this script. Every step is guarded by an existence check, so it picks
+  up where it left off rather than starting over:
 
-  ⚠️ If you close this Cloud Shell tab the process keeps running (nohup), but a
-  Cloud Shell session that TIMES OUT entirely will kill it. Re-run this script
-  if that happens — it picks up where it left off.
+      bash ${BASH_SOURCE[0]}
 
 EOF
+  exit "${rc}"
+fi
+
+if [ "${START_WORKLOAD}" = "0" ]; then
+  echo
+  echo "Load complete. Workload NOT started (CG_WORKLOAD=0)."
+  echo "Start it yourself with: bash ${REPO}/workload/deadline-day.sh run"
+  exit 0
+fi
+
+cat <<'EOF'
+
+================================================================================
+  Load complete. Starting the deadline-day traffic simulator.
+
+  ⚠️  LEAVE THIS TAB ALONE.
+
+      The simulator runs here, in the foreground, for the rest of the lab. It
+      prints a summary line every ten seconds. That output is what keeps this
+      Cloud Shell session from being reclaimed while you work in the console.
+
+      Open a SECOND Cloud Shell tab with the + button for everything else.
+
+      Press Ctrl+C here when you have finished the lab.
+================================================================================
+
+EOF
+
+sleep 4
+exec bash "${REPO}/workload/deadline-day.sh" run
