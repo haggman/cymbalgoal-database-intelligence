@@ -106,6 +106,41 @@ resource "google_project_service" "apis" {
     # ASSISTIVE_EXPERIENCES_NOT_SUPPORTED_WITHOUT_GEMINI_CLOUD_ASSIST. See the
     # note on the field itself.
     "cloudaicompanion.googleapis.com",
+
+    # ------------------------------------------------------------------------
+    # 🔴 ADDED 2026-08-22 — the API set that clicking "Enable Gemini Cloud
+    # Assist at no cost" turns on by hand.
+    #
+    # Task 0.3 asks the student to do that click. These are what it enables
+    # underneath, so enabling them here means the click has less to do and the
+    # console's AI affordances are less likely to be half-awake when a student
+    # reaches them. Read off the Cloud Assist "Enabled APIs" panel, 2026-08-22.
+    #
+    # ⚠️ EVERY STRING BELOW IS VERIFIED, NOT GUESSED. The five Gemini/Cloud Hub
+    # ones were enabled by hand with `gcloud services enable` on a live lab
+    # project and accepted; logging and recommender are long-standing standard
+    # names. A WRONG SERVICE STRING HALTS THE APPLY FOR EVERY STUDENT AT ONCE,
+    # so do not add to this list from a console label — get the real string from
+    # `gcloud services list --enabled` first.
+    #
+    # ⚠️ NOT ADDED, deliberately: the Cloud HUB set — servicehealth,
+    # maintenance, cloudquotas, capacityplanner. They power Cloud Hub's panels,
+    # they are a separate opt-in from Cloud Assist, and no Lab 3 task sends a
+    # student to Cloud Hub. Every API in this list is apply time and one more
+    # thing that can fail at Start Lab; do not add what no task uses.
+    #
+    # ⚠️ NONE OF THESE IS EXPECTED TO FIX THE QUERY INSIGHTS WARM-UP. Monitoring
+    # was already enabled by this same block and the ~50 minute delay happened
+    # anyway. These are for the Cloud Assist experience, not for telemetry.
+    # ------------------------------------------------------------------------
+    "geminicloudassist.googleapis.com",
+    "cloudasset.googleapis.com",
+    "designcenter.googleapis.com",
+    "appoptimize.googleapis.com",
+    "apphub.googleapis.com",
+    "apptopology.googleapis.com",
+    "logging.googleapis.com",
+    "recommender.googleapis.com",
   ])
   service            = each.value
   disable_on_destroy = false
@@ -304,6 +339,35 @@ resource "google_alloydb_instance" "primary" {
     # service string to get it back — no Lab 3 task uses the panel, and a
     # guessed service string halts provisioning for every student at once.
     assistive_experiences_enabled = false
+
+    # 🔴 UPDATED 2026-08-22 — AND THE EARLIER CONCLUSION WAS WRONG.
+    #
+    # The comment above says "the field IS Cloud Assist." Measured today, it is
+    # not. On a live instance with this field ABSENT from observabilityConfig
+    # (i.e. false), the Query Insights "AI assisted troubleshooting" feature
+    # showed as ENABLED in the console, without anyone clicking its Enable
+    # button. `gcloud alloydb instances describe` returned:
+    #
+    #   enabled=True;maxQueryStringLength=20000;preserveComments=True;
+    #   queryPlansPerMinute=20;recordApplicationTags=True;trackActiveQueries=True;
+    #   trackWaitEventTypes=True;trackWaitEvents=True
+    #
+    # No assistiveExperiencesEnabled. Feature on anyway.
+    #
+    # So the console feature and this instance field are DIFFERENT THINGS, and
+    # P-62 was chasing the wrong lever. What actually changed on that project was
+    # Gemini Cloud Assist being enabled (API + the no-cost entitlement), which is
+    # now done at Start Lab: geminicloudassist.googleapis.com is in the API list
+    # above, and the APIs are enabled before the instance is created.
+    #
+    # ⚠️ LEAVE THIS false. It still fails the instance create, it is not what
+    # gates the feature, and setting it would gamble a create on a field nothing
+    # needs. If AI assisted troubleshooting comes up enabled on a fresh build,
+    # that confirms the API is the gate and this field stays irrelevant.
+    #
+    # ⚠️ ALSO NOTED: track_client_address = true is set below but did NOT appear
+    # in that describe output. Nothing uses client address, so it is not chased —
+    # but do not assume every field in this block is landing.
   }
 
   # ⚠️ EVERY NAME VERIFIED against
@@ -388,12 +452,33 @@ resource "google_alloydb_instance" "primary" {
     # indistinguishable from an advisor that has nothing to say. See above.
     "google_columnar_engine.enable_auto_columnarization" = "off"
 
-    # A convenience, never a step the lab depends on. The advisor's automated
-    # analysis defaults to 'EVERY 24 HOURS', which is why the console's
-    # Recommendations column was empty in a twelve-hour-old project. One hour is
-    # the floor the format allows. Task 3 uses the ON-DEMAND function
-    # (google_db_advisor_recommend_indexes) and does not wait for this.
-    "google_db_advisor.auto_advisor_schedule" = "EVERY 1 HOURS"
+    # 🔴 REMOVED 2026-08-22: "google_db_advisor.auto_advisor_schedule" = "EVERY 1 HOURS"
+    #
+    # It was set to make the console's Recommendations column populate during a
+    # lab, since the advisor's automated analysis defaults to 'EVERY 24 HOURS'
+    # and a 2-3 hour lab never reaches it. The comment here claimed "one hour is
+    # the floor the format allows." THAT WAS NEVER VERIFIED AND IS WRONG.
+    #
+    # Measured 2026-08-22 against the supportedDatabaseFlags API: this flag
+    # publishes "stringRestrictions": {} — EMPTY. Google constrains nothing, so
+    # any string is accepted at apply time and never validated. And the console's
+    # own Query Insights settings dropdown offers a MINIMUM of FOUR HOURS.
+    #
+    # Which explains the symptom that started this: the console's "Run frequency"
+    # field rendered BLANK, because a dropdown offering 4/8/12/24 hours cannot
+    # display a stored value of "EVERY 1 HOURS". It looked broken because we had
+    # written something the UI has no option for.
+    #
+    # So the flag could not do its job anyway — a four-hour floor is longer than
+    # the lab — while costing a blank settings field a student might notice and
+    # a value Google does not validate. Removed. The default (24 hours) also
+    # never fires inside a lab, which is the same outcome with one fewer flag,
+    # and it renders correctly in the console.
+    #
+    # ✅ Nothing depends on this. Task 3 calls google_db_advisor_recommend_indexes()
+    # ON DEMAND and deliberately ignores the schedule. Task 2 tells students the
+    # Recommendations column is empty and to go ask the advisor directly, which
+    # is now deterministic rather than a race.
 
     "google_ml_integration.enable_preview_ai_functions"        = "on"
     "google_ml_integration.enable_cost_optimized_ai_functions" = "on"
