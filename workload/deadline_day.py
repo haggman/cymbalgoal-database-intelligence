@@ -493,6 +493,38 @@ def summarize(batch, prefix=""):
     print(prefix + " | ".join(line), flush=True)
 
 
+def _load_samples():
+    """Read samples.jsonl, tolerating a torn or empty line.
+
+    🔴 FIXED 2026-08-23, after `report --since 3` died with
+    json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+    in front of a student.
+
+    The flusher appends a batch to this file every ten seconds while `report`
+    or `status` may be reading it, so a read can catch a partially written
+    line, or a trailing empty one. json.loads then raises, and a Python
+    traceback in the middle of Task 5 reads as a broken lab rather than as a
+    race on a log file.
+
+    Skip anything that does not parse. One dropped sample out of hundreds of
+    thousands moves no percentile, and a report that prints is worth vastly
+    more than a report that is exactly right.
+    """
+    rows = []
+    if not os.path.exists(SAMPLES):
+        return rows
+    with open(SAMPLES) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
 def status_report(window_s=60.0):
     """Is traffic flowing RIGHT NOW? Reads the samples file, not the log.
 
@@ -502,11 +534,7 @@ def status_report(window_s=60.0):
     nothing and looked like a broken workload. The samples file is written by
     the flusher either way, so it is the honest source for this check.
     """
-    if not os.path.exists(SAMPLES):
-        print("  no samples yet — the first batch lands about ten seconds"
-              " after the simulator starts. Give it a moment and re-run.")
-        return
-    rows = [json.loads(l) for l in open(SAMPLES)]
+    rows = _load_samples()
     if not rows:
         print("  no samples yet — give it about ten seconds and re-run.")
         return
@@ -522,9 +550,9 @@ def status_report(window_s=60.0):
 
 
 def report(since_min=0.0):
-    if not os.path.exists(SAMPLES):
-        sys.exit(f"no samples at {SAMPLES}")
-    batch = [json.loads(l) for l in open(SAMPLES)]
+    batch = _load_samples()
+    if not batch:
+        sys.exit(f"no samples yet at {SAMPLES} — is the generator running?")
     # ⚠️ samples.jsonl is APPEND-ONLY and survives restarts, so a bare report is
     # cumulative over everything ever run. That dilutes a before/after
     # comparison to the point of uselessness: apply an index at minute 40 and
