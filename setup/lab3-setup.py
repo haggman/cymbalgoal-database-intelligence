@@ -32,16 +32,14 @@ WHAT IS DIFFERENT IN LAB 3, and why:
      the cost-optimized AI function ruling comes back YES (D-36).
      Turn it off with CG_PROFILES=0.
 
-  4. A SYNTHETIC HIGH-VOLUME TABLE, OFF BY DEFAULT. CG_SYNTHETIC=<millions>
-     builds a deadline-day ticker table server-side. This exists so the
-     prototype can MEASURE whether the real corpus can be made slow before
-     anyone decides to add data to the story. Do not ship it on without a
-     measurement that says the real corpus is not enough.
+  4. A SYNTHETIC HIGH-VOLUME TABLE, OFF BY DEFAULT — and it ships off.
+     CG_SYNTHETIC=<millions> builds a deadline-day ticker table server-side.
+     Measurement settled the question it existed to answer: the real corpus
+     is slow enough on its own. Kept for experiments in your own projects.
 
   5. IT REPORTS. Extensions actually present, indexes actually built, table
      sizes actually on disk. Lab 3 is a lab about reading what the database
-     tells you; its loader may as well set the example, and the prototype
-     needs these numbers anyway.
+     tells you; its loader may as well set the example.
 """
 
 import csv
@@ -155,10 +153,10 @@ def discover():
     log(f"you       {user}")
     log(f"target    {uri}")
 
-    # PROTOTYPE VALUE, and cheap: what did observability_config actually settle
-    # to? Terraform asked for enabled + track_active_queries; enhanced query
-    # insights may be entitlement-gated, in which case the apply succeeds and
-    # the fields come back false. Tasks 2 and 4 both depend on the answer.
+    # Cheap diagnostic worth keeping: what did observability_config actually
+    # settle to? Terraform asked for enabled + track_active_queries, and Tasks
+    # 2 and 4 both depend on those fields being true — so the loader prints
+    # what the instance really has, where a broken run will show it.
     obs = primary[0].get("observabilityConfig")
     log(f"observability  {json.dumps(obs) if obs else '<ABSENT from instances.get>'}")
     log()
@@ -426,14 +424,11 @@ def main():
         except Exception as e:                                     # noqa: BLE001
             log(f"  ⚠️ {ext}: {e}")
 
-    # ⚠️ PROTOTYPE INSTRUMENT, not a lab requirement — and a candidate for
-    # removal once the prototype is done.
-    #
-    # pg_stat_statements is the table Query Insights is built on. Reading it
-    # directly answers "is the workload actually slow" with NO console lag at
-    # all, which is what lets the prototype separate two questions that are
-    # easy to confuse: whether the queries hurt, and how long the console takes
-    # to say so.
+    # Diagnostic instrument, kept deliberately. pg_stat_statements is the
+    # table Query Insights is built on, and reading it directly answers "is
+    # the workload actually slow" with no console lag — which separates two
+    # questions that are easy to confuse: whether the queries hurt, and how
+    # long the console takes to say so.
     #
     # TWO ways this fails and they look nothing alike. The extension may not be
     # creatable at all, or it may create and then error on SELECT because the

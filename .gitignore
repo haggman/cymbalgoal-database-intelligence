@@ -20,3 +20,7 @@ workload/out/
 __pycache__/
 .venv/
 .DS_Store
+
+# internal build tooling — not for students
+build/
+lint_md.py

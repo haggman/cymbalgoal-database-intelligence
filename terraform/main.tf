@@ -16,10 +16,9 @@
 #   5. GONE roles/discoveryengine.viewer on the AlloyDB service agent
 #   6. GONE roles/geminidataanalytics.queryDataUser on the student
 #   7. HELD google_ml_integration.enable_cost_optimized_ai_functions and
-#           google_columnar_engine.enabled — both PENDING a prototype ruling.
-#           They are here so the ruling can be MEASURED. If either comes back
-#           NO, delete it rather than leaving it as an oversight. That is the
-#           standing open question mkt014 left behind; do not inherit it.
+#           google_columnar_engine.enabled — still under evaluation (D-36).
+#           If either is ever ruled out, delete it rather than leaving it as
+#           an oversight.
 #
 # WHAT THIS FILE PROVISIONS: cluster, instance, APIs, IAM, and the observability
 # configuration. Nothing else. It cannot run SQL — the Terraform runner sits
@@ -145,16 +144,11 @@ resource "google_project_service" "apis" {
   service            = each.value
   disable_on_destroy = false
 
-  # ⚠️ UNRESOLVED, and a prototype item rather than a guess. Database Center is
-  # a fleet-level console surface and it is NOT KNOWN whether it needs an API
-  # enabled in the project it is reporting on. Candidates, in order of
-  # plausibility: none at all (it reads the AlloyDB control plane directly),
-  # cloudasset.googleapis.com, securitycenter.googleapis.com.
-  #
-  # Do NOT add one of these on a hunch. A service string that does not exist
-  # halts the apply for the whole room — the single most expensive way to be
-  # wrong in this file. The prototype answers it by watching what Database
-  # Center shows in a project with only the list above enabled.
+  # Database Center needs no additional API in the monitored project — live
+  # runs confirm it reports normally with only the services listed above.
+  # Resist adding services on a hunch: a service string that does not exist
+  # halts the apply for the whole room, the single most expensive way to be
+  # wrong in this file.
 }
 
 # -----------------------------------------------------------------------------
@@ -286,12 +280,9 @@ resource "google_alloydb_instance" "primary" {
   # view. Ship without this line and Task 4 has no data, on every cluster in
   # the room, and it will look like the workload is not running.
   #
-  # ⚠️ WHETHER THIS BLOCK IS ACCEPTED AT ALL IS THE #1 PROTOTYPE QUESTION.
-  # Enhanced query insights is the Advanced tier of Database Insights and may
-  # be entitlement-gated the way Cloud Assist investigations are (P-02). If the
-  # apply fails or the fields come back false, Task 2 falls back to standard
-  # Query Insights and Task 4 loses wait events — which reshapes two tasks, so
-  # it gets answered before any prose is written.
+  # This block is accepted as-is, and the fields verify true on live
+  # clusters — enhanced query insights is not entitlement-gated the way Cloud
+  # Assist investigations are. Tasks 2 and 4 are built on what it enables.
   observability_config {
     enabled = true
 
@@ -414,7 +405,7 @@ resource "google_alloydb_instance" "primary" {
     # which shipped saying "your query is already efficient—thanks to the
     # columnar engine and the data size—so no index is recommended." That read
     # like writing around a failure. It was a correct diagnosis nobody followed
-    # up on. Eight months later it cost this session a full prototype cycle.
+    # up on. Eight months later it cost this lab's development a full test cycle.
     #
     # THE RESOLUTION — and it makes the lab better rather than smaller:
     #
@@ -483,12 +474,11 @@ resource "google_alloydb_instance" "primary" {
     "google_ml_integration.enable_preview_ai_functions"        = "on"
     "google_ml_integration.enable_cost_optimized_ai_functions" = "on"
 
-    # ⚠️ PROTOTYPE ITEM, deliberately NOT set yet. Turning work_mem down is a
-    # legitimate way to push sorts and hashes to disk and make the workload
-    # hurt on a small corpus. It is also a way to make a lab that teaches
-    # nothing except that someone sabotaged the instance. Measure the honest
-    # workload first; reach for this only if the corpus genuinely cannot be
-    # made slow, and if it is used, the lab must SAY it is set low and why.
+    # work_mem is deliberately NOT set. Turning it down would push sorts and
+    # hashes to disk and make the workload hurt artificially — a lab that
+    # teaches nothing except that someone sabotaged the instance. Measurement
+    # settled it: the honest workload is genuinely slow on this corpus, so no
+    # thumb ever went on the scale.
   }
 
   depends_on = [google_service_networking_connection.psa]

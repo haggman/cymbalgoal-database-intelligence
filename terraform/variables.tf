@@ -24,8 +24,8 @@ variable "gcp_region" {
       GONE:  ai.rank()'s reranker resolving to Discovery Engine's global. Lab 3
              does no reranking.
       LIVE:  google_ml.embedding() and the ai.* family call Vertex from the
-             cluster's own region — but only if the prototype rules the
-             cost-optimized AI functions IN (D-36 gate).
+             cluster's own region — as long as the cost-optimized AI
+             functions stay in (D-36).
       UNKNOWN: Database Insights / Advanced Query Insights regional
              availability. Never measured. This is the one to settle before
              widening anything.
@@ -112,10 +112,10 @@ variable "cpu_count" {
     Halving the vCPUs makes every sequential scan hurt more AND provisions
     faster — both directions we want.
 
-    Left at 8 for the FIRST Start Lab run so that provisioning time stays
-    comparable with mkt013 and mkt014 and any difference is attributable. The
-    prototype measures the workload at 8 first, then at 4. Do not change this
-    before there is a measurement to compare against.
+    Fixed at 8, and the lab's prose now depends on it: the workload was
+    measured at 8 vCPUs and is genuinely slow there, and Task 4.5 does
+    arithmetic with an 8-vCPU instance. Do not change this without
+    re-measuring the workload and re-reading that task.
   EOT
   type        = number
   default     = 8
